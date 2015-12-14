@@ -2,6 +2,7 @@
              ExistentialQuantification, GeneralizedNewtypeDeriving, TemplateHaskell #-}
 module DSSimulation where
 
+import Debug.Trace
 import Data.List.Utils
 import Data.Sequence
 import Data.Traversable
@@ -74,8 +75,8 @@ type Handlers s t = Address -> Handler s t
 
 
 -- Crash Behavior
-type CrashBehavior s t a = HandlerM s t a 
-type CrashBehaviors s t a = Address -> CrashBehavior s t a
+type CrashBehavior s t = HandlerM s t ()
+type CrashBehaviors s t = Address -> CrashBehavior s t
 
 
 -- Global state (config hidden in here too, even though it
@@ -89,14 +90,24 @@ data DSState s gs t = DSState {
                               , seed :: StdGen
                               }
 
-processGCmds :: Time -> [GlobalCommand t] -> State (DSState s gs t) [Event t]
-processGCmds currentTime = concat . (mapM processGCmd)
+makeDSState conf startStates gbStartState randGen =
+  DSState conf 
+          startStates 
+          (Data.Sequence.replicate (Data.Sequence.length startStates) True) 
+          gbStartState 
+          [] 
+          randGen
+
+processGCmds :: Address -> Time -> [GlobalCommand t] -> State (DSState s gs t) [DSEvent t]
+processGCmds localhost currentTime cmds = mapM processGCmd cmds >>= return . concat
   where
-    processGCmd (GSend (Message address t)) time = return $ [Event time (Send address t)]
-    processGCmd (GCrash address) = takeDown address >> return $ [Event time (Crash address)]
-    processGCmd (GTimedCrash address time) = takeDown address >> return $ [Event time (Restart Address)]
-    processGCmd (GRestart address) = takeUp address currentTime >>=
-      \es -> (Event time (Restart address)):es
+    processGCmd (GSend (Message address t) time) = return [Event time (Receive address localhost currentTime t)]
+    processGCmd (GCrash address) = takeDown address >> return [Event currentTime (Crash address)]
+    processGCmd (GTimedCrash address time) = takeDown address >> return  [Event currentTime (Crash address),
+                                                                          Event time (Restart address)]
+    processGCmd (GRestart address) = do
+      es <- takeUp address currentTime
+      return ((Event currentTime (Restart address)):es)
     processGCmd (GDefer m) = do
       dsstate <- get
       put dsstate { deferredMessages = m:(deferredMessages dsstate) }
@@ -110,10 +121,10 @@ random range = do
   put dsstate { seed = rgNew }
   return result
 
-setTimeouts :: Address -> Time -> [Timer t] -> State (DSState s gs t) [DSEvent t]
-setTimeouts address time timers = return $ map setTimeout timers
+makeTimeoutEvents :: Address -> Time -> [Timer t] -> State (DSState s gs t) [DSEvent t]
+makeTimeoutEvents address time timers = return $ map (makeTimeoutEvent address time) timers
 
-setTimeout address time (Timer delay t) = Event (time+delay) (Receive address address (time+delay) t)
+makeTimeoutEvent address time (Timer delay t) = Event (time+delay) (Receive address address (time+delay) t)
 
 takeDown :: Address -> State (DSState s gs t) ()
 takeDown address = do
@@ -125,19 +136,19 @@ takeUp :: Address -> Time -> State (DSState s gs t) [DSEvent t]
 takeUp address time = do
   dsstate <- get
   let cb = ((crashBehaviors . conf) dsstate)
-  let (newState, Outgoing (messages, timers)) = execHandler cb address time (index (machineStates dsstate) address)
+  let (newState, Outgoing (messages, timers)) = execHandler (cb address) address time (index (machineStates dsstate) address)
   put dsstate { upStatus = (update address False (upStatus dsstate)),
                 machineStates = update address newState (machineStates dsstate) }
 
-  ts <- setTimeouts address time timers
+  ts <- makeTimeoutEvents address time timers
 
-  let gb = (globalBehavior . conf) dsstate)
-  let (nrg, newGbState, cmds) = runGB (gb (Event time (Restart address) []) 
+  let gb = ((globalBehavior . conf) dsstate)
+  let (nrg, newGbState, cmds) = runGB (gb (Event time (Restart address)) []) 
                                       (seed dsstate)  
                                       (machineStates dsstate)
                                       (gbState dsstate)
   put dsstate { gbState = newGbState, seed = nrg }
-  es <- processGCmds time cmds
+  es <- processGCmds address time cmds
   return $ merge ts es 
 
 -- GlobalBehavior
@@ -200,71 +211,59 @@ runGB (GlobalBehaviorM x) rg machineStates gbState = (nrg, newGbState, cmds)
 data DSConf s gs t = DSConf { 
                            handlers :: Handlers s t
                          , globalBehavior :: GlobalBehavior s gs t 
-                         , crashBehaviors :: CrashBehaviors s t a
+                         , crashBehaviors :: CrashBehaviors s t
                          }
 
 
 -- Put all machine/global handlers/network behavior together
-instance EventType (DSEventType t) (DSState s gs t) where
+instance (Show t) => EventType (DSEventType t) (DSState s gs t) where
   process e@(Event time (Send _ _)) = return []
   process e@(Event time (Crash _)) = return []
-  process e@(Event time (Restart _)) = return []
+  process e@(Event time (Restart address)) = 
+    takeUp address time
   process e@(Event time (Receive address _ _ t)) = do
     dsstate <- get
-    let mHandlers = (handlers . conf) dsstate
-    let states = machineStates dsstate
-    
-    -- get current state, handler of recipient machine
-    let receiverState = index states address
-    let handler = mHandlers address
-
-    -- run handler to update state and get timers/outgoing messages
-    let (newState, Outgoing (messages, timers)) = handle handler e receiverState
-
-    -- update global state with new machine state
-    put dsstate { machineStates = (update address newState states) }
-
-    -- send messages (with global behavior), set timers
-    
-    let gb = (globalBehavior . conf) dsstate)
-    let (nrg, newGbState, cmds) = runGB (gb e messages) 
-                                        (seed dsstate)  
-                                        (machineStates dsstate)
-                                        (gbState dsstate)
-    put dsstate { gbState = newGbState, seed = nrg }
-    es <- processGCmds time cmds
-
-    ts <- setTimeouts address time timers
-    return $ merge es ts
-   
+    if index (upStatus dsstate) address then
+      notCrashed
+      else
+        return []
 
     where
-      processGB = do
+      notCrashed = do
         dsstate <- get
-        let gb = (globalBehavior . conf) dsstate
-        let (nrg, newGbState, cmds) = runGB (seed dsstate)  
+        let mHandlers = (handlers . conf) dsstate
+        
+        -- get current state, handler of recipient machine
+        let receiverState = index (machineStates dsstate) address
+        let handler = mHandlers address
+
+        -- run handler to update state and get timers/outgoing messages
+        let (newState, Outgoing (messages, timers)) = handle handler e receiverState
+
+        -- update global state with new machine state
+        put dsstate { machineStates = (update address newState (machineStates dsstate)) }
+        dsstate <- get
+
+        -- send messages (with global behavior), set timers
+        
+        let gb = ((globalBehavior . conf) dsstate)
+        let (nrg, newGbState, cmds) = runGB (gb e messages) 
+                                            (seed dsstate)  
                                             (machineStates dsstate)
                                             (gbState dsstate)
-        
-  
-      send :: [Message t] -> State (DSState s gs t) [DSEvent t]
-      send messages = do
-        mapM sendWithRandDelay messages >>= return . mconcat
-        
-        
-      sendWithRandDelay (Message toAddress t) = do
-        dsstate <- get
-        let (delay, newSeed) = randomR (80, 80) (seed dsstate)
-        put dsstate { seed = newSeed }
-        return $ [ Event time               (Send address t)
-                 , Event (time+(delay % 1)) (Receive toAddress address time t) ]
+        put dsstate { gbState = newGbState, seed = nrg }
+        es <- processGCmds address time cmds
+
+        ts <- makeTimeoutEvents address time timers
+        return $ merge es ts
 
       handle handler (Event time (Receive _ _ _ t)) startState = 
         execHandler (handler t) address time startState
 
 
 -- interface
-simulateDS :: DSConf s gs t
+simulateDS :: (Show t) =>
+              DSConf s gs t
            -> Seq s
            -> gs
            -> StdGen
@@ -273,7 +272,7 @@ simulateDS :: DSConf s gs t
 simulateDS conf startStates gbStartState randGen events = 
   simulate events startState
   where
-    startState = DSState conf startStates gbStartState randGen
+    startState = makeDSState conf startStates gbStartState randGen
 
 -- alternate (better?) definition
 --simulateDS events = (flip simulate) . DSState

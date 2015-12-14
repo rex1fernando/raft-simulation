@@ -55,6 +55,7 @@ timelines history =  ((vcat' (with & sep .~ 2) $
       where
         etc (Event time (Send _ rt), _) = (time, 2*(multiplier rt))
         etc (Event time (Receive _ _ _ rt), _) = (time, 2*(multiplier rt))
+        etc (Event time (Crash _), _) = (time, 1)
         
         multiplier (RequestVote _ _) = 0
         multiplier (Voted _ _) = 1

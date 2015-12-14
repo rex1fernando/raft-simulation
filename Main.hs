@@ -16,14 +16,9 @@ showMandS (m,s) = (show m) ++ "\n" ++ (show s)
 
 --main = do
 --  randGen <- newStdGen
---  mapM (putStrLn . showMandS) $ simulateRaft randGen
+--  mapM (putStrLn . showMandS) $ take 100 $ simulateRaft randGen
 main = do
   randGen <- newStdGen
-  
-  let s = DSState (DSConf (\_ -> raftHandler) gh)
-                  (fromList (startStates randGen))
-                  randGen
-
   let t = timelines $ simulateRaft randGen
   --let t = timelines [(Event (0%1) (Send 0 LeaderLost), s), (Event (1%1) (Receive 1 0 0 LeaderLost), s)] 
   mainWith $ pad 1.1 t  -- # connectOutside (0::Int,0::Int) (1::Int,1::Int)

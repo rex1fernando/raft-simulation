@@ -109,11 +109,18 @@ mesgToAllButMe rm =
   localhost >>= \l -> mapM_ (flip message rm) $ filter (/= l) [0..4]
 
 
-gh _ _ = return ()
+global :: GlobalBehavior RaftState () RaftMessage
+global (Event time _) ms = do
+  if time > 170 then
+    crash 0
+    else return ()
+  mapM_ (flip send (time+10)) ms
+
+cb _ = return ()
 
 
 simulateRaft :: StdGen -> [(DSEvent RaftMessage, DSState RaftState () RaftMessage)]
-simulateRaft randGen = simulateDS (DSConf (\_ -> raftHandler) gh)
+simulateRaft randGen = simulateDS (DSConf (\_ -> raftHandler) global cb)
                                   (fromList (startStates r1))
                                   ()
                                   r2

@@ -15,19 +15,19 @@ instance Ord (Event t) where
 
 
 class EventType t s where
-  process :: Event t -> State s [Event t]
+  process :: (Show t) => Event t -> State s [Event t]
 
 
 
 
-remainingEvents :: (EventType t s) => Event t -> [Event t] -> State s [Event t]
+remainingEvents :: (EventType t s, Show t) => Event t -> [Event t] -> State s [Event t]
 remainingEvents event oldRemaining = do
   newEvents <- process event
   return $ merge oldRemaining (sort newEvents)
    
   
 
-simulate :: (EventType t s) => [Event t] -> s -> [(Event t, s)]
+simulate :: (EventType t s, Show t) => [Event t] -> s -> [(Event t, s)]
 simulate [] _ = []
 simulate events oldState = (e,newState):(simulate remaining newState)
   where
