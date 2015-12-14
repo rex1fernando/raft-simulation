@@ -7,7 +7,7 @@ import Control.Monad.State (put, get)
 import Data.Sequence (fromList)
 import System.Random
 import Simulation
-import DSSimulation
+import DSSimulation 
 
 -- split Random into n Randoms
 splitN 0 randGen = []
@@ -29,67 +29,72 @@ data RaftState = RaftState { currentTerm :: Int,
 startState randGen = RaftState 0 Nothing 0 randGen False
 startStates randGen = map startState $ splitN 5 randGen
 
+type RaftHandler = Handler RaftState RaftMessage
 
 -- LeaderLost handler
-raftHandler :: Address -> Handler RaftState RaftMessage
-raftHandler me _ LeaderLost = do
+raftHandler :: RaftHandler
+raftHandler LeaderLost = do
   state <- get
-  let (timeout, newRG) = randomR (150000,300000) (randGen state)
+  me <- localhost
+  let (timeout, newRG) = randomR (150,300) (randGen state)
   put state { currentTerm = ((currentTerm state) + 1),
               votedFor = Just me,
               votesForMe = 1,
               randGen = newRG,
               leaderElected = False}
-  return (toAllBut me (RequestVote ((currentTerm state) + 1) me),
-          [Timer (timeout % 1) ElectionTimeout])
+  mesgToAllButMe (RequestVote ((currentTerm state) + 1) me)
+  setTimeout (timeout % 1) ElectionTimeout
 
 -- ElectionTimeout handler
-raftHandler me _ ElectionTimeout = do
+raftHandler ElectionTimeout = do
   state <- get
-  let (timeout, newRG) = randomR (150000,300000) (randGen state)
+  me <- localhost
+  let (timeout, newRG) = randomR (150,300) (randGen state)
   if leaderElected state then
-    return ([],[])
+    return ()
     else do
       put state { currentTerm = ((currentTerm state) + 1),
                   votedFor = Just me,
                   votesForMe = 1,
                   randGen = newRG,  
                   leaderElected = False }
-      return (toAllBut me (RequestVote ((currentTerm state) + 1) me),
-              [Timer (timeout % 1) ElectionTimeout])
+      mesgToAllButMe (RequestVote ((currentTerm state) + 1) me)
+      setTimeout (timeout % 1) ElectionTimeout
 
 -- RequestVote handler
-raftHandler me _ (RequestVote term address) = do
+raftHandler (RequestVote term address) = do
   state <- get
+  me <- localhost
   if (((currentTerm state) == term) && (canVoteFor address state)) || 
      (currentTerm state < term) then do
     put state { currentTerm = term,
                 votedFor = Just address,
                 votesForMe = 0 }
-    return ([Message address (Voted term address)], [])
+    message address $ Voted term address
     else
-      return ([Message address (Voted (currentTerm state) (fromJust (votedFor state)))], [])
+      message address $ Voted (currentTerm state) (fromJust (votedFor state))
 
 -- IAmLeader handler
-raftHandler me _ (IAmLeader term address) = do
+raftHandler (IAmLeader term address) = do
   state <- get
+  me <- localhost
   if ((currentTerm state) <= term) then
     put state { currentTerm = term,
                 leaderElected = True }
     else return ()
-  return ([],[])
 
-raftHandler me _ (Voted term address) = do
+raftHandler (Voted term address) = do
   state <- get
+  me <- localhost
   if (address == me) then do
     put state { votesForMe = (votesForMe state)+1 }
     if ((votesForMe state) >= 3) then do
       put state { leaderElected = True }
-      return (toAllBut me (IAmLeader (currentTerm state) me), [])
+      mesgToAllButMe $ IAmLeader (currentTerm state) me
       else
-        return ([],[])
+        return ()
     else
-      return ([],[])
+      return ()
 
 -- If I haven't voted for anything yet or I've already voted for
 -- the requester
@@ -98,15 +103,19 @@ canVoteFor address state =
   (isNothing (votedFor state)) || 
   ((fromMaybe (-1) (votedFor state)) == address)
 
-toAllBut me rm = map (flip Message rm) $ filter (/= me) [0..4]
+--toAllBut me rm = map (flip Message rm) $ filter (/= me) [0..4]
+
+mesgToAllButMe rm = 
+  localhost >>= \l -> mapM_ (flip message rm) $ filter (/= l) [0..4]
 
 
+gh _ _ = return ()
 
-handlers = map raftHandler [0..4]
 
-
-simulateRaft randGen = simulateDS (map ((Event 0) . (flip Message LeaderLost)) [0..4])
+simulateRaft :: StdGen -> [(DSEvent RaftMessage, DSState RaftState () RaftMessage)]
+simulateRaft randGen = simulateDS (DSConf (\_ -> raftHandler) gh)
                                   (fromList (startStates r1))
-                                  (fromList handlers)
+                                  ()
                                   r2
+                                  (map (messageEvent LeaderLost 0) [0..4])
   where (r1, r2) = split randGen

@@ -17,7 +17,7 @@ import RaftSimulation
 
 tshow p x = D.trace (p++(show x)) x
 
-timelines :: [(DSEvent RaftMessage, DSState RaftState RaftMessage)] -> Diagram Cairo
+timelines :: [(DSEvent RaftMessage, DSState RaftState () RaftMessage)] -> Diagram Cairo
 
 timelines history =  ((vcat' (with & sep .~ 2) $ 
                       map timeline [0..(num-1)]) === legend # scale 5 # alignL)
@@ -43,9 +43,13 @@ timelines history =  ((vcat' (with & sep .~ 2) $
         x = fromRational ((time/duration)*(30%1))
     
     (Event duration _) = (fst . last) history
-    DSState conf startStates _ = (snd . head) history
+    dsstate = (snd . head) history
+    startStates = machineStates dsstate
+    conf = DSSimulation.conf dsstate
 
-    eventTimeColor :: (DSEvent RaftMessage, DSState RaftState RaftMessage)
+
+
+    eventTimeColor :: (DSEvent RaftMessage, DSState RaftState () RaftMessage)
                    -> (Simulation.Time,Int)
     eventTimeColor x = etc x
       where
@@ -59,7 +63,7 @@ timelines history =  ((vcat' (with & sep .~ 2) $
         multiplier (LeaderLost) = 4
         
 
-    forMachine :: Address -> (DSEvent RaftMessage, DSState RaftState RaftMessage) -> Bool
+    forMachine :: Address -> (DSEvent RaftMessage, DSState RaftState () RaftMessage) -> Bool
     forMachine a' (e,_) = a' == receiver e
 
     legend = node "RequestVote" 0 === node "Voted" 2 
@@ -72,7 +76,7 @@ timelines history =  ((vcat' (with & sep .~ 2) $
 
 
   
-    link :: (DSEvent RaftMessage, DSState RaftState RaftMessage) -> Diagram Cairo -> Diagram Cairo
+    link :: (DSEvent RaftMessage, DSState RaftState () RaftMessage) -> Diagram Cairo -> Diagram Cairo
     link (Event rtime (Receive r s stime _),_) = arrowR (tshow "sender: " (s,stimeD)) (tshow "receiver: " (r,rtimeD))
       where
         stimeD = (round stime) :: Int

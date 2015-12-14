@@ -1,2 +1,5 @@
 *.swp
 .stack-work
+*.hi
+*.o
+.ipynb_checkpoints
