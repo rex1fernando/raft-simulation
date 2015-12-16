@@ -17,9 +17,6 @@ import Simulation
 
 type Address = Int
 
--- Events/Event "proxies"
-data Receipt t = Receipt Address t Time -- Include time sent
-                        deriving Show 
 data DSEventType t = Send Address t
                    | Receive Address Address Time t
                    | Crash Address
@@ -98,6 +95,12 @@ makeDSState conf startStates gbStartState randGen =
           [] 
           randGen
 
+machineState :: DSState s gs t -> Address -> s
+machineState dsstate address = index (machineStates dsstate) address
+
+machineIsUp :: DSState s gs t -> Address -> Bool
+machineIsUp dsstate address = index (upStatus dsstate) address
+
 processGCmds :: Address -> Time -> [GlobalCommand t] -> State (DSState s gs t) [DSEvent t]
 processGCmds localhost currentTime cmds = mapM processGCmd cmds >>= return . concat
   where
@@ -113,14 +116,6 @@ processGCmds localhost currentTime cmds = mapM processGCmd cmds >>= return . con
       put dsstate { deferredMessages = m:(deferredMessages dsstate) }
       return []
 
--- convenience function to get random int and update seed
-random :: (Int,Int) -> State (DSState s gs t) Int
-random range = do
-  dsstate <- get
-  let (result, rgNew) = randomR range (seed dsstate)
-  put dsstate { seed = rgNew }
-  return result
-
 makeTimeoutEvents :: Address -> Time -> [Timer t] -> State (DSState s gs t) [DSEvent t]
 makeTimeoutEvents address time timers = return $ map (makeTimeoutEvent address time) timers
 
@@ -130,6 +125,8 @@ takeDown :: Address -> State (DSState s gs t) ()
 takeDown address = do
   dsstate <- get
   put dsstate { upStatus = (update address False (upStatus dsstate)) }
+
+
 
 
 takeUp :: Address -> Time -> State (DSState s gs t) [DSEvent t]
@@ -145,7 +142,7 @@ takeUp address time = do
   let gb = ((globalBehavior . conf) dsstate)
   let (nrg, newGbState, cmds) = runGB (gb (Event time (Restart address)) []) 
                                       (seed dsstate)  
-                                      (machineStates dsstate)
+                                      dsstate
                                       (gbState dsstate)
   put dsstate { gbState = newGbState, seed = nrg }
   es <- processGCmds address time cmds
@@ -164,7 +161,7 @@ data GlobalCommand t = GSend (Message t) Time
                      | GDefer (Message t)
 
 newtype GlobalBehaviorM s gs t a = GlobalBehaviorM (RandT StdGen 
-                                                   (ReaderT (Seq s) 
+                                                   (ReaderT (DSState s gs t)
                                                    (StateT gs 
                                                    (Writer [GlobalCommand t]))) a)
                           deriving (Monad, 
@@ -172,14 +169,17 @@ newtype GlobalBehaviorM s gs t a = GlobalBehaviorM (RandT StdGen
                                     Functor, 
                                     MonadState gs,
                                     MonadWriter [GlobalCommand t],
-                                    MonadReader (Seq s),
+                                    MonadReader (DSState s gs t),
                                     MonadRandom)
 
 type GlobalBehavior s gs t = DSEvent t -> [Message t] -> GlobalBehaviorM s gs t ()
 
 
 getMachineState :: Address -> GlobalBehaviorM s gs t s
-getMachineState address = ask >>= \x -> return $ index x address
+getMachineState address = ask >>= \x -> return $ machineState x address
+
+getMachineUpStatus :: Address -> GlobalBehaviorM s gs t Bool
+getMachineUpStatus address = ask >>= \x -> return $ machineIsUp x address
 
 crash :: Address -> GlobalBehaviorM s gs t ()
 crash address = tell [GCrash address]
@@ -200,10 +200,10 @@ send :: Message t -> Time -> GlobalBehaviorM s gs t ()
 send message time = tell [GSend message time]
 
 
-runGB :: GlobalBehaviorM s gs t () -> StdGen -> Seq s -> gs -> (StdGen, gs, [GlobalCommand t])
-runGB (GlobalBehaviorM x) rg machineStates gbState = (nrg, newGbState, cmds)
+runGB :: GlobalBehaviorM s gs t () -> StdGen -> DSState s gs t -> gs -> (StdGen, gs, [GlobalCommand t])
+runGB (GlobalBehaviorM x) rg dsstate gbState = (nrg, newGbState, cmds)
   where 
-    (((_, nrg), newGbState), cmds) = runWriter (runStateT (runReaderT (runRandT x rg) machineStates) gbState)
+    (((_, nrg), newGbState), cmds) = runWriter (runStateT (runReaderT (runRandT x rg) dsstate) gbState)
 
 -- 
 
@@ -248,8 +248,8 @@ instance (Show t) => EventType (DSEventType t) (DSState s gs t) where
         
         let gb = ((globalBehavior . conf) dsstate)
         let (nrg, newGbState, cmds) = runGB (gb e messages) 
-                                            (seed dsstate)  
-                                            (machineStates dsstate)
+                                            (seed dsstate)
+                                            dsstate
                                             (gbState dsstate)
         put dsstate { gbState = newGbState, seed = nrg }
         es <- processGCmds address time cmds

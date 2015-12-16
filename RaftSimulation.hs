@@ -111,8 +111,11 @@ mesgToAllButMe rm =
 
 global :: GlobalBehavior RaftState () RaftMessage
 global (Event time _) ms = do
-  if time > 170 then
-    crash 0
+  if time > 170 then do
+    alreadyCrashed <- getMachineUpStatus 0
+    if alreadyCrashed then    
+      crash 0
+      else return ()
     else return ()
   mapM_ (flip send (time+10)) ms
 
