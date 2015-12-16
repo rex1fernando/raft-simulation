@@ -47,43 +47,41 @@ timelines history =  ((vcat' (with & sep .~ 2) $
     startStates = machineStates dsstate
     conf = DSSimulation.conf dsstate
 
+eventTimeColor :: (DSEvent RaftMessage, DSState RaftState () RaftMessage)
+               -> (Simulation.Time,Int)
+eventTimeColor x = etc x
+  where
+    etc (Event time (Send _ rt), _) = (time, 2*(multiplier rt))
+    etc (Event time (Receive _ _ _ rt), _) = (time, 2*(multiplier rt))
+    etc (Event time (Crash _), _) = (time, 3)
+    
+    multiplier (RequestVote _ _) = 0
+    multiplier (Voted _ _) = 1
+    multiplier (ElectionTimeout) = 2
+    multiplier (IAmLeader _ _) = 3
+    multiplier (LeaderLost) = 4
+    
+
+forMachine :: Address -> (DSEvent RaftMessage, DSState RaftState () RaftMessage) -> Bool
+forMachine a' (e,_) = a' == receiver e
+
+legend = node "RequestVote" 0 === node "Voted" 2 
+     === node "ElectionTimeout" 4 === node "IAmLeader" 6
+     === node "LeaderLost" 8
+
+node t n = (text t # fontSizeL 0.2 # fc black)
+         <> ((rect 2 0.2 # fc (bs !! n)) ||| 
+            (rect 2 0.2 # fc (bs !! (n+1))))
 
 
-    eventTimeColor :: (DSEvent RaftMessage, DSState RaftState () RaftMessage)
-                   -> (Simulation.Time,Int)
-    eventTimeColor x = etc x
-      where
-        etc (Event time (Send _ rt), _) = (time, 2*(multiplier rt))
-        etc (Event time (Receive _ _ _ rt), _) = (time, 2*(multiplier rt))
-        etc (Event time (Crash _), _) = (time, 1)
-        
-        multiplier (RequestVote _ _) = 0
-        multiplier (Voted _ _) = 1
-        multiplier (ElectionTimeout) = 2
-        multiplier (IAmLeader _ _) = 3
-        multiplier (LeaderLost) = 4
-        
 
-    forMachine :: Address -> (DSEvent RaftMessage, DSState RaftState () RaftMessage) -> Bool
-    forMachine a' (e,_) = a' == receiver e
+link :: (DSEvent RaftMessage, DSState RaftState () RaftMessage) -> Diagram Cairo -> Diagram Cairo
+link (Event rtime (Receive r s stime _),_) = arrowR (tshow "sender: " (s,stimeD)) (tshow "receiver: " (r,rtimeD))
+  where
+    stimeD = (round stime) :: Int
+    rtimeD = (round rtime) :: Int
+link _ = id
 
-    legend = node "RequestVote" 0 === node "Voted" 2 
-         === node "ElectionTimeout" 4 === node "IAmLeader" 6
-         === node "LeaderLost" 8
-
-    node t n = (text t # fontSizeL 0.2 # fc black)
-             <> ((rect 2 0.2 # fc (bs !! n)) ||| 
-                (rect 2 0.2 # fc (bs !! (n+1))))
-
-
-  
-    link :: (DSEvent RaftMessage, DSState RaftState () RaftMessage) -> Diagram Cairo -> Diagram Cairo
-    link (Event rtime (Receive r s stime _),_) = arrowR (tshow "sender: " (s,stimeD)) (tshow "receiver: " (r,rtimeD))
-      where
-        stimeD = (round stime) :: Int
-        rtimeD = (round rtime) :: Int
-    link _ = id
-  
 arrowR (x,y) (z,w) | (x,y) == (z,w) = id
                   | otherwise = connectOutside' (with  
                                                 & headLength .~ local 0.15
