@@ -300,6 +300,16 @@ instance (Show t) => Show (DSEvent t) where
     where
       timeDecimal :: Float
       timeDecimal = fromRational time
+  show (Event time (Crash address)) = 
+    "Machine " ++ (show address) ++ " crash at " ++ (show timeDecimal)
+    where
+      timeDecimal :: Float
+      timeDecimal = fromRational time
+  show (Event time (Restart address)) = 
+    "Machine " ++ (show address) ++ " restart at " ++ (show timeDecimal)
+    where
+      timeDecimal :: Float
+      timeDecimal = fromRational time
 
 
 -- Ideas:
