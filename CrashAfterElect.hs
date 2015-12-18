@@ -9,23 +9,24 @@ import DSSimulation
 
 delay = 10 
 specialDelay = 5
-sendAllMessages time ms = 
-  mapM_ (flip send (time+delay)) ms
+
+sendAllMessages :: Time -> [Message RaftMessage] -> RaftGBehaviorM ()
+sendAllMessages time = 
+  mapM_ (`send` (time+delay)) 
 
 type RaftGBehaviorM a = GlobalBehaviorM RaftState Bool RaftMessage a
 type RaftGBehavior = GlobalBehavior RaftState Bool RaftMessage
 
 global :: RaftGBehavior
-global (Event time (Receive _ leader  _ (AppE _ _ _ _ _ _))) ms = do
+global (Event time (Receive _ leader  _ (AppE {}))) ms = do
   alreadyCrashed <- get
-  if not alreadyCrashed then do
+  unless alreadyCrashed $ do
     crash leader
     put True
-    else return ()
   sendAllMessages time ms
 
 
-global (Event time _) ms = do
+global (Event time _) ms = 
   sendAllMessages time ms
 
 cb _ = return ()

@@ -11,13 +11,15 @@ type RaftGBehavior = GlobalBehavior RaftState GlobalState RaftMessage
 
 delay = 10 
 specialDelay = 5
-sendAllMessages time ms = 
-  mapM_ (flip send (time+delay)) ms
+
+sendAllMessages :: Time -> [Message RaftMessage] -> RaftGBehaviorM ()
+sendAllMessages time = 
+  mapM_ (`send` (time+delay)) 
 
 deviousScheme :: GlobalState -> Time -> Address -> [Message RaftMessage] -> RaftGBehaviorM ()
 deviousScheme NothingYet time leader ms = do
   send (Message leader AddEntry) (time+1)
-  put $ FirstHeartbeat
+  put FirstHeartbeat
   sendAllMessages time ms
 
 deviousScheme FirstHeartbeat time leader ms = do
@@ -29,19 +31,18 @@ deviousScheme FirstHeartbeat time leader ms = do
     sendWDelay (d,m) = send m $ time+d
 
 deviousScheme (AddedOne startTime) time leader ms = do
-  if time == startTime + specialDelay then do
+  when (time == startTime + specialDelay) $ do
     crash leader
-    put $ CrashedLeader
-    else return ()
+    put CrashedLeader
 
   sendAllMessages time ms
 
 deviousScheme CrashedLeader time leader ms = do
   send (Message leader AddEntry) (time+1)
-  put $ AddedOneMore
+  put AddedOneMore
   sendAllMessages time ms
 
-deviousScheme AddedOneMore time leader ms = do
+deviousScheme AddedOneMore time leader ms = 
   sendAllMessages time ms
 
 global :: RaftGBehavior
@@ -50,7 +51,7 @@ global (Event time (Receive _ _ _ (AppE _ leader _ _ _ _))) ms = do
   state <- get
   case state of 
     NothingYet -> deviousScheme state time leader ms
-    FirstHeartbeat -> mapM_ (flip send (time+10)) ms
+    FirstHeartbeat -> mapM_ (`send` (time+10)) ms
     AddedOne _ -> deviousScheme state time leader ms
     _ -> deviousScheme state time leader ms
 
@@ -58,7 +59,7 @@ global (Event time (Receive leader _ _ AddEntry)) ms = do
   state <- get
   deviousScheme state time leader ms
 
-global (Event time x) ms = do
+global (Event time x) ms = 
 --  if time > 170 then do
 --    alreadyCrashed <- getMachineUpStatus 0
 --    if alreadyCrashed then    

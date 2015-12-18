@@ -11,7 +11,7 @@ import Data.Ratio
 import Diagrams.Names
 import Diagrams.Util
 
-import DSSimulation (Address, DSEvent, DSState(..), receiver, DSEventType(..))
+import DSSimulation (Address, DSEvent, DSState(..), receiver, DSEventType(..), machineState)
 import Simulation (Event(..), Time)
 import RaftFull
 
@@ -59,7 +59,7 @@ timelines history =  (
                         # applyAll (map link history)
   where
     timeline :: Address -> Diagram Cairo
-    timeline a = (position $ map ((eventRect a) . eventTimeColor) 
+    timeline a = (position $ map ((eventRect a) . eventTimeStateColor) 
                            $ historyUntilCrash history a)
                     
               <> alignL (rect 30 1 # fc (bs !! 0) # lw none) 
@@ -69,11 +69,15 @@ timelines history =  (
     num = length startStates
 
 
-    eventRect :: Address -> (Simulation.Time,Int) -> (P2 Double, Diagram Cairo)
-    eventRect a (time,c) = (p2 (x,0), (rect 0.2 1
+    eventRect :: Address -> (Simulation.Time,Int,[Int],Int) -> (P2 Double, Diagram Cairo)
+    eventRect a (time,term,log,c) = (p2 (x,0), (rect 0.2 1
                                       # fc (bs !! c)  
                                       # lw none 
                                       # named (tshow "" (a,(round time)::Int)))
+                                      ===
+                                      textN (show term)
+                                      ===
+                                      textN (show log)
                            )
       where 
         x :: Double
@@ -84,13 +88,16 @@ timelines history =  (
     startStates = machineStates dsstate
     conf = DSSimulation.conf dsstate
 
-eventTimeColor :: (DSEvent RaftMessage, DSState RaftState a RaftMessage)
-               -> (Simulation.Time,Int)
-eventTimeColor x = etc x
+eventTimeStateColor :: (DSEvent RaftMessage, DSState RaftState a RaftMessage)
+               -> (Simulation.Time, Int, [Int], Int)
+eventTimeStateColor x = etc x
   where
-    etc (Event time (Receive _ _ _ rt), _) = (time, 2+(variantNum rt))
-    etc (Event time (Crash _), _) = (time, 1)
-    
+    etc (Event time (Receive address _ _ rt), s) = (time, currentTerm state, simpleLog state, 2+(variantNum rt))
+      where
+        state = machineState s address
+    etc (Event time (Crash address), s) = (time, currentTerm state, simpleLog state, 1)
+      where
+        state = machineState s address
     
 
 forMachine :: Address -> (DSEvent RaftMessage, DSState RaftState a RaftMessage) -> Bool
@@ -100,9 +107,10 @@ legend = vcat $ map legendElement [0..7]
 
 legendElement n = node (numToVariant n) (n+1)
 
-node t n =  rect 0.1 0.06 # fc (bs !! n) # lw none ||| 
-            ((text t # fontSizeL 0.05 # fc black) <> rect 0.7 0.06 # fc white # lw none)
+node t n =  rect 0.12 0.12 # fc (bs !! n) # lw none ||| 
+            ((text t # fontSizeL 0.10 # fc black) <> rect 1.5 0.12 # fc white # lw none)
             
+textN t = ((text t # fontSizeL 0.4 # fc black) <> rect 0.1 0.5 # fc white # lw none)
 
 
 
