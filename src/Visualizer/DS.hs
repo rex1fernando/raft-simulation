@@ -1,6 +1,6 @@
 {-# LANGUAGE NoMonomorphismRestriction, GADTs, FlexibleContexts,
     DeriveGeneric #-}
-module FullVisualizer where
+module Visualizer where
 
 import Debug.Trace as D
 import Diagrams.Prelude
@@ -11,9 +11,10 @@ import Data.Ratio
 import Diagrams.Names
 import Diagrams.Util
 
-import DSSimulation (Address, DSEvent, DSState(..), receiver, DSEventType(..), machineState)
-import Simulation (Event(..), Time)
-import RaftFull
+import Layer.DS (Address, DSEvent, DSState(..), receiver, DSEventType(..), machineState)
+import Layer.Event (Event(..), Time)
+import Layer.Raft
+import Util
 
 class Numerable a where
   variantNum :: a -> Int
@@ -28,15 +29,15 @@ instance Numerable RaftMessage where
   variantNum (AddEntry) = 6
 
 numToVariant 0 = "Crash"
-numToVariant 1 = "AppendEntries"
-numToVariant 2 = "AppendEntriesR"
-numToVariant 3 = "RequestVote"
-numToVariant 4 = "RequestVoteR"
-numToVariant 5 = "ElectionTimeout"
-numToVariant 6 = "HeartbeatTimeout"
-numToVariant 7 = "AddEntry"
+numToVariant 1 = "Restart"
+numToVariant 2 = "AppendEntries"
+numToVariant 3 = "AppendEntriesR"
+numToVariant 4 = "RequestVote"
+numToVariant 5 = "RequestVoteR"
+numToVariant 6 = "ElectionTimeout"
+numToVariant 7 = "HeartbeatTimeout"
+numToVariant 8 = "AddEntry"
 
-tshow p x = D.trace (p++(show x)) x
 
 isCrash ((Event _ (Crash _)),_) = True
 isCrash _ = False
@@ -46,7 +47,7 @@ timelines :: [(DSEvent RaftMessage, DSState RaftState a RaftMessage)] -> Diagram
 
 historyForMachine history a = filter (forMachine a) history
 
-historyUntilCrash history a = (takeWhile (not . isCrash) $ historyForMachine history a)
+historyUntilCrash history a = (takeWhile (const True) $ historyForMachine history a)
                              ++ (filter isCrash $ historyForMachine history a)
 
 timelines history =  (
@@ -69,7 +70,7 @@ timelines history =  (
     num = length startStates
 
 
-    eventRect :: Address -> (Simulation.Time,Int,[Int],Int) -> (P2 Double, Diagram Cairo)
+    eventRect :: Address -> (Layer.Event.Time,Int,[Int],Int) -> (P2 Double, Diagram Cairo)
     eventRect a (time,term,log,c) = (p2 (x,0), (rect 0.2 1
                                       # fc (bs !! c)  
                                       # lw none 
@@ -86,16 +87,19 @@ timelines history =  (
     (Event duration _) = (fst . last) history
     dsstate = (snd . head) history
     startStates = machineStates dsstate
-    conf = DSSimulation.conf dsstate
+    conf = Layer.DS.conf dsstate
 
 eventTimeStateColor :: (DSEvent RaftMessage, DSState RaftState a RaftMessage)
-               -> (Simulation.Time, Int, [Int], Int)
+               -> (Layer.Event.Time, Int, [Int], Int)
 eventTimeStateColor x = etc x
   where
-    etc (Event time (Receive address _ _ rt), s) = (time, currentTerm state, simpleLog state, 2+(variantNum rt))
+    etc (Event time (Receive address _ _ rt), s) = (time, currentTerm state, simpleLog state, 3+(variantNum rt))
       where
         state = machineState s address
     etc (Event time (Crash address), s) = (time, currentTerm state, simpleLog state, 1)
+      where
+        state = machineState s address
+    etc (Event time (Restart address), s) = (time, currentTerm state, simpleLog state, 2)
       where
         state = machineState s address
     
@@ -103,14 +107,15 @@ eventTimeStateColor x = etc x
 forMachine :: Address -> (DSEvent RaftMessage, DSState RaftState a RaftMessage) -> Bool
 forMachine a' (e,_) = a' == receiver e
 
-legend = vcat $ map legendElement [0..7]
+legend = vcat $ map legendElement [0..8]
 
 legendElement n = node (numToVariant n) (n+1)
 
 node t n =  rect 0.12 0.12 # fc (bs !! n) # lw none ||| 
             ((text t # fontSizeL 0.10 # fc black) <> rect 1.5 0.12 # fc white # lw none)
             
-textN t = ((text t # fontSizeL 0.4 # fc black) <> rect 0.1 0.5 # fc white # lw none)
+--textN t = ((text t # fontSizeL 0.4 # fc black) <> rect 0.1 0.5 # fc white # lw none)
+textN t = ((text t # fontSizeL 0.2 # fc black) <> rect 0.1 0.3 # fc white # lw none)
 
 
 

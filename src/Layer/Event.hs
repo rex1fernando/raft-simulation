@@ -1,5 +1,5 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
-module Simulation where
+module Layer.Event where
 
 import Control.Monad.State
 import Data.List

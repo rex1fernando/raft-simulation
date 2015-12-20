@@ -1,10 +1,17 @@
-module CrashAfterAdd where
+module Scenario.CrashBadElect where
 
 import Control.Monad.State
 
-import RaftFull
-import Simulation
-import DSSimulation
+import Layer.Raft
+import Layer.Event
+import Layer.DS
+
+data GlobalState = NothingYet
+                 | FirstHeartbeat
+                 | AddedOne Time
+                 | CrashedLeader
+                 | AddedOneMore
+                 deriving Show
 
 type RaftGBehaviorM a = GlobalBehaviorM RaftState GlobalState RaftMessage a
 type RaftGBehavior = GlobalBehavior RaftState GlobalState RaftMessage
@@ -24,7 +31,8 @@ deviousScheme NothingYet time leader ms = do
 
 deviousScheme FirstHeartbeat time leader ms = do
   put $ AddedOne time
-  sendStaggered ms [specialDelay]
+  --sendStaggered ms [specialDelay]
+  mapM_ (`send` (time+specialDelay)) (drop 1 ms)
 
   where
     sendStaggered ms delays = mapM_ sendWDelay $ zip delays ms 
@@ -38,8 +46,9 @@ deviousScheme (AddedOne startTime) time leader ms = do
   sendAllMessages time ms
 
 deviousScheme CrashedLeader time leader ms = do
-  send (Message leader AddEntry) (time+1)
-  put AddedOneMore
+  when (time > 80) $ do
+    send (Message leader AddEntry) (time+1)
+    put AddedOneMore
   sendAllMessages time ms
 
 deviousScheme AddedOneMore time leader ms = 
@@ -59,17 +68,11 @@ global (Event time (Receive leader _ _ AddEntry)) ms = do
   state <- get
   deviousScheme state time leader ms
 
-global (Event time x) ms = 
---  if time > 170 then do
---    alreadyCrashed <- getMachineUpStatus 0
---    if alreadyCrashed then    
---      crash 0
---      else return ()
---    else return ()
+global (Event time x) ms =
   sendAllMessages time ms
 
 cb _ = return ()
 
 
 
-simulateRaft randGen = RaftFull.simulateRaft randGen global NothingYet
+simulateRaft randGen = Layer.Raft.simulateRaft randGen global NothingYet

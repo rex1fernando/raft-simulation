@@ -1,5 +1,5 @@
 {-# LANGUAGE MultiParamTypeClasses, FlexibleContexts #-}
-module RaftFull where
+module Layer.Raft where
 
 import Prelude hiding (length, replicate, take)
 import Data.Ratio
@@ -11,8 +11,8 @@ import Data.Sequence (fromList, Seq, empty, (><),
                       update, take, tails, (|>))
 import Data.Foldable (toList)
 import System.Random
-import Simulation
-import DSSimulation 
+import Layer.Event
+import Layer.DS 
 import Util
 
 
@@ -54,9 +54,9 @@ data RaftMessage = AppE { term :: Int,      -- AppendEntries
                            follower :: Address,
                            success :: Bool }
                  | ReqV { term :: Int,             -- RequestVote RPC
-                          candidateId :: Address
-                     --   lastLogIndex :: Int,
-                     --   lastLogTerm :: Int 
+                          candidateId :: Address,
+                          lastLogIndex :: Int,
+                          lastLogTerm :: Int 
                           }
                  | ReqVR { term :: Int,            -- Response
                            voteGranted :: Bool }
@@ -84,9 +84,9 @@ nextIndexForM :: RaftState -> Address -> Int
 nextIndexForM s = index (nextIndex s)
 
 setNextIndex :: RaftState -> Address -> Int -> RaftState
-setNextIndex s a i = s { nextIndex = update i a (nextIndex s) }
+setNextIndex s a i = s { nextIndex = update a i (nextIndex s) }
 setMatchIndex :: RaftState -> Address -> Int -> RaftState
-setMatchIndex s a i = s { matchIndex = update i a (matchIndex s) }
+setMatchIndex s a i = s { matchIndex = update a i (matchIndex s) }
 
 logLength :: RaftState -> Int
 logLength s = length (raftLog s)
@@ -96,6 +96,10 @@ entriesStartingAt s i = toList $ index (tails (raftLog s)) i
 
 entryAtPos :: RaftState -> Int -> LogEntry
 entryAtPos s = index (raftLog s) 
+
+lastEntry :: RaftState -> LogEntry
+lastEntry s | logLength s == 0 = LogEntry { entryIndex = -1, entryTerm = -1 }
+lastEntry s = index (raftLog s) (logLength s - 1)
 
 append :: RaftState -> Int -> RaftState
 append s t = 
@@ -138,47 +142,24 @@ becomeLeader = do
 sendHeartbeat :: RaftHandlerM ()
 sendHeartbeat = do
   me <- localhost
-  state <- get
---mesgToAllButMe AppE { term = currentTerm state,
---                       leader =  me,
---                       entries = [],
---                       prevLogIndex = 0,
---                       prevLogTerm = 0,
---                       leaderCommit = 0 }
-  mapM_ appendEntries $ filter (/=me) [0..numMachines-1]
+  mapM_ appendEntriesOrHeartbeat $ filter (/=me) [0..numMachines-1]
   setTimeout (70%1) HeartbeatTimeout
 
 updateCommitIndex :: RaftHandlerM ()
 updateCommitIndex = return ()
 
-appendEntries :: Address -> RaftHandlerM ()
-appendEntries rcvr = do
+appendEntriesOrHeartbeat = appendEntries_ True
+appendEntries = appendEntries_ False
+
+appendEntries_ :: Bool -> Address ->  RaftHandlerM ()
+appendEntries_ shouldPing rcvr = do
   me <- localhost
   state <- get
 
   let rNextIndex = nextIndexForM state rcvr
   let pli = rNextIndex - 1
   let plt = case pli of (-1) -> 0 
-                        ; _  -> entryTerm $ entryAtPos state (rNextIndex - 1)
-
-  when (logLength state - 1 >= rNextIndex) $
-    message rcvr   AppE { term = currentTerm state,
-                          leader = me,
-                          prevLogIndex = pli,
-                          prevLogTerm = plt,
-                          entries = entriesStartingAt state rNextIndex,
-                          leaderCommit = commitIndex state }
-    
-
-appendEntries :: Bool -> Address ->  RaftHandlerM ()
-appendEntries shouldPing rcvr = do
-  me <- localhost
-  state <- get
-
-  let rNextIndex = nextIndexForM state rcvr
-  let pli = rNextIndex - 1
-  let plt = case pli of (-1) -> 0 
-                        ; _  -> entryTerm $ entryAtPos state (rNextIndex - 1)
+                        ; _  -> entryTerm $ entryAtPos state pli
 
   when (logLength state - 1 >= rNextIndex || shouldPing) $
     message rcvr   AppE { term = currentTerm state,
@@ -187,6 +168,7 @@ appendEntries shouldPing rcvr = do
                           prevLogTerm = plt,
                           entries = entriesStartingAt state rNextIndex,
                           leaderCommit = commitIndex state }
+
 
 
 getRandom :: (Integer,Integer) -> RaftHandlerM Integer
@@ -217,6 +199,8 @@ raftHandler ElectionTimeout = do
       becomeCandidate
       state <- get
       mesgToAllButMe ReqV { term = currentTerm state,
+                            lastLogIndex = logLength state - 1,
+                            lastLogTerm = entryTerm (lastEntry state),
                             candidateId = me }
 
 -- HeartbeatTimeout handler
@@ -235,7 +219,7 @@ raftHandler AddEntry = do
   return ()
 
 -- RequestVote handler
-raftHandler (ReqV term candidateId) = do
+raftHandler (ReqV term candidateId lastLogIndex lastLogTerm) = do
   state <- get
 
   if term < currentTerm state then
@@ -250,7 +234,8 @@ raftHandler (ReqV term candidateId) = do
       -- skipping log up to date check for now
       -- (maybe we can show the protocol failing because of this)
       state <- get
-      if isNothing (votedFor state) ||
+      if isNothing (votedFor state) && 
+         candidateUpToDate state lastLogIndex lastLogTerm ||
          (votedFor state == Just candidateId) then 
         message candidateId ReqVR { term = currentTerm state,
                                     voteGranted = True }
@@ -281,15 +266,13 @@ raftHandler (AppE term leader prevLogIndex prevLogTerm entries leaderCommit) = d
                             success = False }
     else do
       -- else make sure term is up to date with leader
-      put state { currentTerm = term }
+      put state { currentTerm = term,
+                  receivedPing = True }
       state <- get
 
       -- If entries is empty then this is just a ping
-      if null entries then
-        put state { receivedPing = True }
-        -- don't even have to reply
-        else 
-
+      -- don't have to reply
+      unless (null entries) $
           if prevLogIndex == (-1)
              || indexSatisfies (raftLog state) prevLogIndex matchesTerm then do
             put state { raftLog = insertAll (take prevLogIndex (raftLog state)) entries }
@@ -318,23 +301,31 @@ raftHandler (AppER term follower success) = do
   if term > currentTerm state then
     becomeFollower term (-1)
     else if success then do
-      put $ setNextIndex state follower $ length (raftLog state)
-      put $ setMatchIndex state follower $ length (raftLog state) - 1
+      put $ setNextIndex state follower $ logLength state
+      state <- get
+      put $ setMatchIndex state follower $ logLength state - 1
       updateCommitIndex
       else do
         put $ setNextIndex state follower $ nextIndexForM state follower - 1 
         appendEntries follower
 
+candidateUpToDate :: RaftState -> Int -> Int -> Bool
+candidateUpToDate state cLastIndex cLastTerm -- = True
+   | logLength state == 0 = True
+   | cLastTerm == entryTerm (lastEntry state) = cLastIndex >= logLength state - 1
+   | otherwise = entryTerm (lastEntry state) < cLastTerm
+  
 
-data GlobalState = NothingYet
-                 | FirstHeartbeat
-                 | AddedOne Time
-                 | CrashedLeader
-                 | AddedOneMore
-                 deriving Show
 
+cb _ = do
+  state <- get
+  put $ state {
+                commitIndex = 0,
+                lastApplied = 0,
+                nextIndex = replicate numMachines (logLength state),
+                matchIndex = replicate numMachines (-1)
+              }
 
-cb _ = return ()
 
 startState rg = RaftState { currentTerm = 0,
                             raftLog = empty,
@@ -349,10 +340,21 @@ startState rg = RaftState { currentTerm = 0,
                             currentLeader = -1 }
 startStates randGen = map startState $ splitN 5 randGen
 
+removeCrashRcvs :: [(DSEvent RaftMessage, DSState RaftState a RaftMessage)] -> [(DSEvent RaftMessage, DSState RaftState a RaftMessage)]
+removeCrashRcvs = filter rcvrIsUp
+  where
+    rcvrIsUp (Event time (Receive a _ _ _),s) = machineIsUp s a
+    rcvrIsUp _ = True
+
+
+
 simulateRaft :: StdGen -> GlobalBehavior RaftState a RaftMessage -> a -> [(DSEvent RaftMessage, DSState RaftState a RaftMessage)]
-simulateRaft randGen global gss = simulateDS (DSConf (const raftHandler) global cb)
-                                             (fromList (startStates r1))
-                                             gss
-                                             r2
-                                             (map (messageEvent ElectionTimeout 0) [0..4])
-  where (r1, r2) = split randGen
+simulateRaft randGen global gss = removeCrashRcvs events
+  where 
+    (r1, r2) = split randGen
+    events = simulateDS (DSConf (const raftHandler) global cb)
+                                (fromList (startStates r1))
+                                gss
+                                r2
+                                (map (messageEvent ElectionTimeout 0) [0..4])
+

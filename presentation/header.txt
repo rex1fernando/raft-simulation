@@ -1,0 +1,3 @@
+ \usepackage{caption}
+ \DeclareCaptionFormat{plain}{\par}
+\captionsetup{labelformat=empty,labelsep=none}

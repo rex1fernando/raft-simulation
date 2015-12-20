@@ -15,8 +15,15 @@ cabal-version:       >=1.10
 
 executable p3main
   main-is:             Main.hs
+  default-language:    Haskell2010
+  hs-source-dirs:      src
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   build-depends:       base, mtl, MissingH, containers, random,
                        diagrams, diagrams-lib, diagrams-cairo,
                        ihaskell-diagrams, palette, MonadRandom
+  other-modules:       Layer.DS, Layer.Event, Layer.Raft, 
+                       Visualizer, Scenario.CrashAfterAdd, 
+                       Scenario.CrashAfterElect
+                       Scenario.CRAfterAdd,
+                       Scenario.CrashBadElect, Util
 

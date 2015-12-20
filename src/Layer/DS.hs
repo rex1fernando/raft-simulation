@@ -1,6 +1,6 @@
 {-# LANGUAGE MultiParamTypeClasses, FlexibleContexts, FlexibleInstances, TypeSynonymInstances,
              ExistentialQuantification, GeneralizedNewtypeDeriving, TemplateHaskell #-}
-module DSSimulation where
+module Layer.DS where
 
 import Debug.Trace
 import Data.List.Utils
@@ -13,12 +13,11 @@ import Control.Monad.State
 import Control.Monad.Reader
 import Control.Monad.Writer
 import Control.Monad.Random
-import Simulation
+import Layer.Event
 
 type Address = Int
 
-data DSEventType t = Send Address t
-                   | Receive Address Address Time t
+data DSEventType t = Receive Address Address Time t
                    | Crash Address
                    | Restart Address
                         deriving Show
@@ -26,7 +25,6 @@ data DSEventType t = Send Address t
 messageEvent t time address = Event time (Receive address address time t)
 type DSEvent t = Event (DSEventType t)
 
-receiver (Event _ (Send a _)) = a
 receiver (Event _ (Receive a _ _ _)) = a
 receiver (Event _ (Crash a)) = a
 receiver (Event _ (Restart a)) = a
@@ -134,8 +132,9 @@ takeUp address time = do
   dsstate <- get
   let cb = ((crashBehaviors . conf) dsstate)
   let (newState, Outgoing (messages, timers)) = execHandler (cb address) address time (index (machineStates dsstate) address)
-  put dsstate { upStatus = (update address False (upStatus dsstate)),
+  put dsstate { upStatus = (update address True (upStatus dsstate)),
                 machineStates = update address newState (machineStates dsstate) }
+  dsstate <- get
 
   ts <- makeTimeoutEvents address time timers
 
@@ -217,7 +216,6 @@ data DSConf s gs t = DSConf {
 
 -- Put all machine/global handlers/network behavior together
 instance (Show t) => EventType (DSEventType t) (DSState s gs t) where
-  process e@(Event time (Send _ _)) = return []
   process e@(Event time (Crash _)) = return []
   process e@(Event time (Restart address)) = 
     takeUp address time
@@ -290,11 +288,6 @@ instance (Show s) => Show (DSState s gs t) where
       showOnLine i s = (show i)++": "++(show s)
 
 instance (Show t) => Show (DSEvent t) where
-  show (Event time (Send address t)) = 
-    "Send: " ++ (show t) ++ " to machine " ++ (show address) ++ " at " ++ (show timeDecimal)
-    where
-      timeDecimal :: Float
-      timeDecimal = fromRational time
   show (Event time (Receive address _ _ t)) = 
     "Receive: " ++ (show t) ++ " to machine " ++ (show address) ++ " at " ++ (show timeDecimal)
     where

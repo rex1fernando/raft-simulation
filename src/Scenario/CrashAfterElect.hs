@@ -1,10 +1,10 @@
-module CrashAfterElect where
+module Scenario.CrashAfterElect where
 
 import Control.Monad.State
 
-import RaftFull
-import Simulation
-import DSSimulation
+import Layer.Event
+import Layer.DS
+import Layer.Raft
 
 
 delay = 10 
@@ -14,15 +14,15 @@ sendAllMessages :: Time -> [Message RaftMessage] -> RaftGBehaviorM ()
 sendAllMessages time = 
   mapM_ (`send` (time+delay)) 
 
-type RaftGBehaviorM a = GlobalBehaviorM RaftState Bool RaftMessage a
-type RaftGBehavior = GlobalBehavior RaftState Bool RaftMessage
+type RaftGBehaviorM a = GlobalBehaviorM RaftState (Bool,Bool) RaftMessage a
+type RaftGBehavior = GlobalBehavior RaftState (Bool,Bool) RaftMessage
 
 global :: RaftGBehavior
 global (Event time (Receive _ leader  _ (AppE {}))) ms = do
-  alreadyCrashed <- get
+  (alreadyCrashed,r) <- get
   unless alreadyCrashed $ do
     crash leader
-    put True
+    put (not r,r)
   sendAllMessages time ms
 
 
@@ -33,4 +33,4 @@ cb _ = return ()
 
 
 
-simulateRaft randGen = RaftFull.simulateRaft randGen global False
+simulateRaft recursive randGen = Layer.Raft.simulateRaft randGen global (False,recursive)
