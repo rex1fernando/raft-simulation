@@ -305,11 +305,3 @@ instance (Show t) => Show (DSEvent t) where
       timeDecimal = fromRational time
 
 
--- Ideas:
--- 
--- Should have:
---  - Send, Receive, Crash, and Restart events
---  - a function that describes the behavior of the network (i.e. delays,
---  packet drops, partition)
---  - Something for each machine which describes crash behavior
---  - A global handler which observes all events and can initiate crashes
