@@ -5,7 +5,8 @@ import Control.Monad.State
 import Data.List
 import Data.List.Utils
 
-type Time = Rational
+type Time = Integer
+type Delta = Integer
 data Event t = Event Time t
 -- Shouldn't ever make two events with the same time but different types
 instance Eq (Event t) where
