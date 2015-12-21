@@ -5,7 +5,7 @@ import Prelude hiding (length, replicate, take)
 import Data.Ratio
 import Data.Maybe (fromMaybe, fromJust, isNothing, Maybe(..))
 import Control.Monad
-import Control.Monad.State (put, get, State)
+import Control.Monad.State (put, get, State, gets)
 import Data.Sequence (fromList, Seq, empty, (><), 
                       replicate, length, index, 
                       update, take, tails, (|>))
@@ -23,14 +23,16 @@ mesgToAllButMe rm =
   localhost >>= \l -> mapM_ (`message` rm) $ filter (/= l) [0..4]
 
 
-data LogEntry = Empty
-              | LogEntry { entryIndex :: Int,
+data LogEntry = LogEntry { entryIndex :: Int,
                            entryTerm :: Int }
                   deriving Show
 
+emptyL :: LogEntry
+emptyL = LogEntry (-1) (-1)
+
 lengthen :: Seq LogEntry -> Int -> Seq LogEntry
 lengthen s i | length s >= i = s
-             | otherwise = s >< replicate (i - length s) Empty
+             | otherwise = s >< replicate (i - length s) emptyL
 
 insert :: Seq LogEntry -> Int -> LogEntry -> Seq LogEntry
 insert s i a | length s <= i = insert (lengthen s (i+1)) i a
@@ -101,6 +103,7 @@ lastEntry :: RaftState -> LogEntry
 lastEntry s | logLength s == 0 = LogEntry { entryIndex = -1, entryTerm = -1 }
 lastEntry s = index (raftLog s) (logLength s - 1)
 
+
 append :: RaftState -> Int -> RaftState
 append s t = 
  s { raftLog = raftLog s |> LogEntry { entryIndex = logLength s,
@@ -113,6 +116,11 @@ simpleLog s = map entryTerm $ toList (raftLog s)
 
 type RaftHandlerM a = HandlerM RaftState RaftMessage a
 type RaftHandler = Handler RaftState RaftMessage
+
+amILeader :: RaftHandlerM Bool
+amILeader = do
+  me <- localhost
+  gets ((==me) . currentLeader)
 
 becomeCandidate :: RaftHandlerM ()
 becomeCandidate = do
@@ -136,7 +144,13 @@ becomeLeader :: RaftHandlerM ()
 becomeLeader = do
   me <- localhost
   state <- get
-  put state { currentLeader = me }
+  put state { currentLeader = me,
+              commitIndex = 0,
+              lastApplied = 0,
+              nextIndex = replicate numMachines (logLength state),
+              matchIndex = replicate numMachines (-1)
+            }
+
   sendHeartbeat
 
 sendHeartbeat :: RaftHandlerM ()
@@ -161,14 +175,14 @@ appendEntries_ shouldPing rcvr = do
   let plt = case pli of (-1) -> 0 
                         ; _  -> entryTerm $ entryAtPos state pli
 
-  when (logLength state - 1 >= rNextIndex || shouldPing) $
+  when (logLength state - 1 >= rNextIndex || shouldPing) $ do
+    let meeee = me
     message rcvr   AppE { term = currentTerm state,
                           leader = me,
                           prevLogIndex = pli,
                           prevLogTerm = plt,
                           entries = entriesStartingAt state rNextIndex,
                           leaderCommit = commitIndex state }
-
 
 
 getRandom :: (Integer,Integer) -> RaftHandlerM Integer
@@ -204,8 +218,10 @@ raftHandler ElectionTimeout = do
                             candidateId = me }
 
 -- HeartbeatTimeout handler
-raftHandler HeartbeatTimeout =
-  sendHeartbeat
+raftHandler HeartbeatTimeout = do
+  l <- amILeader
+  when l 
+    sendHeartbeat
 
 
 -- AddEntry handler
@@ -267,7 +283,8 @@ raftHandler (AppE term leader prevLogIndex prevLogTerm entries leaderCommit) = d
     else do
       -- else make sure term is up to date with leader
       put state { currentTerm = term,
-                  receivedPing = True }
+                  receivedPing = True,
+                  currentLeader = leader }
       state <- get
 
       -- If entries is empty then this is just a ping
@@ -307,7 +324,9 @@ raftHandler (AppER term follower success) = do
       updateCommitIndex
       else do
         put $ setNextIndex state follower $ nextIndexForM state follower - 1 
-        appendEntries follower
+        l <- amILeader
+        when l $ 
+          appendEntries follower
 
 candidateUpToDate :: RaftState -> Int -> Int -> Bool
 candidateUpToDate state cLastIndex cLastTerm -- = True
