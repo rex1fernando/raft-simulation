@@ -20,7 +20,8 @@ executable p3main
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   build-depends:       base, mtl, MissingH, containers, random,
                        diagrams, diagrams-lib, diagrams-cairo,
-                       ihaskell-diagrams, palette, MonadRandom
+                       ihaskell-diagrams, palette, MonadRandom,
+                       lens
   other-modules:       Layer.DS, Layer.Event, Layer.Raft, 
                        Visualizer, Scenario.CrashAfterAdd, 
                        Scenario.CrashAfterElect

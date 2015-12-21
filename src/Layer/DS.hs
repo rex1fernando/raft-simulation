@@ -32,46 +32,34 @@ receiver (Event _ (Restart a)) = a
 
 -- Building the application monad
 
-data Message t = Message Address t 
-                        deriving Show
-data Timer t = Timer Time t 
-                        deriving Show
-newtype Outgoing t = Outgoing ([Message t], [Timer t])
-                        deriving (Monoid)
+data Request t = Message Address t
+               | Timer Time t
+
 data MachineInfo = MachineInfo { _time :: Time, _localhost :: Address }
 -- Our application monad
-newtype HandlerM s t a = HandlerM (ReaderT MachineInfo (StateT s (Writer (Outgoing t))) a)
+newtype MachineBehaviorM s t a = MachineBehaviorM (ReaderT MachineInfo (StateT s (Writer ([Request t]))) a)
                         deriving (Monad, Applicative, Functor, MonadState s, MonadReader MachineInfo,
-                                  MonadWriter (Outgoing t))
+                                  MonadWriter ([Request t]))
 
-localhost :: HandlerM s t Address
+localhost :: MachineBehaviorM s t Address
 localhost = ask >>= (return . _localhost)
-time :: HandlerM s t Time
-time = ask >>= (return . _time)
+machineTime :: MachineBehaviorM s t Time
+machineTime = ask >>= (return . _time)
    
 
-message address t = tell $ Outgoing ([Message address t],[])
-setTimeout time t = tell $ Outgoing ([],[Timer time t])
+message address t = tell $ [Message address t]
+setTimeout time t = tell $ [Timer time t]
 
 -- Running the monad
-runHandler :: HandlerM s t a -> Address -> Time -> s -> (a, s, Outgoing t)
-runHandler (HandlerM x) address time startState = (a, resultState, outgoing)
+runMB :: MachineBehaviorM s t () -> Address -> Time -> s -> (s, [Request t])
+runMB (MachineBehaviorM x) address time startState = (resultState, outgoing)
   where
-    ((a, resultState), outgoing) = runWriter (runStateT (runReaderT x (MachineInfo time address)) startState) 
+    ((_, resultState), outgoing) = runWriter (runStateT (runReaderT x (MachineInfo time address)) startState) 
 
-execHandler :: HandlerM s t a -> Address -> Time -> s -> (s, Outgoing t)
-execHandler h address time startState = (resultState, outgoing)
-  where
-    (_, resultState, outgoing) = runHandler h address time startState 
 
 -- Handler types
-type Handler s t = t -> HandlerM s t ()
-type Handlers s t = Address -> Handler s t
-
-
--- Crash Behavior
-type CrashBehavior s t = HandlerM s t ()
-type CrashBehaviors s t = Address -> CrashBehavior s t
+type MachineBehavior s t = [t] -> MachineBehaviorM s t ()
+type MachineBehaviors s t = Address -> MachineBehavior s t
 
 
 -- Global state (config hidden in here too, even though it
@@ -79,25 +67,11 @@ type CrashBehaviors s t = Address -> CrashBehavior s t
 data DSState s gs t = DSState { 
                                 conf :: (DSConf s gs t)
                               , machineStates :: (Seq s) 
-                              , upStatus :: (Seq Bool)
                               , gbState :: gs 
-                              , deferredMessages :: [Message t]
-                              , seed :: StdGen
                               }
-
-makeDSState conf startStates gbStartState randGen =
-  DSState conf 
-          startStates 
-          (Data.Sequence.replicate (Data.Sequence.length startStates) True) 
-          gbStartState 
-          [] 
-          randGen
 
 machineState :: DSState s gs t -> Address -> s
 machineState dsstate address = index (machineStates dsstate) address
-
-machineIsUp :: DSState s gs t -> Address -> Bool
-machineIsUp dsstate address = index (upStatus dsstate) address
 
 processGCmds :: Address -> Time -> [GlobalCommand t] -> State (DSState s gs t) [DSEvent t]
 processGCmds localhost currentTime cmds = mapM processGCmd cmds >>= return . concat
@@ -119,33 +93,6 @@ makeTimeoutEvents address time timers = return $ map (makeTimeoutEvent address t
 
 makeTimeoutEvent address time (Timer delay t) = Event (time+delay) (Receive address address (time+delay) t)
 
-takeDown :: Address -> State (DSState s gs t) ()
-takeDown address = do
-  dsstate <- get
-  put dsstate { upStatus = (update address False (upStatus dsstate)) }
-
-
-
-
-takeUp :: Address -> Time -> State (DSState s gs t) [DSEvent t]
-takeUp address time = do
-  dsstate <- get
-  let cb = ((crashBehaviors . conf) dsstate)
-  let (newState, Outgoing (messages, timers)) = execHandler (cb address) address time (index (machineStates dsstate) address)
-  put dsstate { upStatus = (update address True (upStatus dsstate)),
-                machineStates = update address newState (machineStates dsstate) }
-  dsstate <- get
-
-  ts <- makeTimeoutEvents address time timers
-
-  let gb = ((globalBehavior . conf) dsstate)
-  let (nrg, newGbState, cmds) = runGB (gb (Event time (Restart address)) []) 
-                                      (seed dsstate)  
-                                      dsstate
-                                      (gbState dsstate)
-  put dsstate { gbState = newGbState, seed = nrg }
-  es <- processGCmds address time cmds
-  return $ merge ts es 
 
 -- GlobalBehavior
 -- takes in a list of messages
@@ -159,8 +106,14 @@ data GlobalCommand t = GSend (Message t) Time
                      | GRestart Address
                      | GDefer (Message t)
 
+data GlobalInfo s t = GlobalInfo Time (DSConf s t)
+                    
+time :: GlobalInfo s t -> Time
+time (GlobalInfo t _) = t
+
+
 newtype GlobalBehaviorM s gs t a = GlobalBehaviorM (RandT StdGen 
-                                                   (ReaderT (DSState s gs t)
+                                                   (ReaderT GlobalInfo
                                                    (StateT gs 
                                                    (Writer [GlobalCommand t]))) a)
                           deriving (Monad, 
@@ -171,7 +124,7 @@ newtype GlobalBehaviorM s gs t a = GlobalBehaviorM (RandT StdGen
                                     MonadReader (DSState s gs t),
                                     MonadRandom)
 
-type GlobalBehavior s gs t = DSEvent t -> [Message t] -> GlobalBehaviorM s gs t ()
+type GlobalBehavior s gs t = [t] -> [Message t] -> GlobalBehaviorM s gs t ()
 
 
 getMachineState :: Address -> GlobalBehaviorM s gs t s
@@ -204,13 +157,11 @@ runGB (GlobalBehaviorM x) rg dsstate gbState = (nrg, newGbState, cmds)
   where 
     (((_, nrg), newGbState), cmds) = runWriter (runStateT (runReaderT (runRandT x rg) dsstate) gbState)
 
--- 
 
 -- distributed system configuration
 data DSConf s gs t = DSConf { 
-                           handlers :: Handlers s t
+                           machineBehaviors :: MachineBehaviors s t
                          , globalBehavior :: GlobalBehavior s gs t 
-                         , crashBehaviors :: CrashBehaviors s t
                          }
 
 
