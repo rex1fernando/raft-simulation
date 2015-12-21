@@ -31,8 +31,18 @@ type RaftGBehavior = GlobalBehavior RaftState (Bool,Bool) RaftMessage
 global :: RaftGBehavior
 
 
-global (Event time (Receive sender _ _ _)) ms = 
-  if time < 160 then
+global (Event time (Receive sender _ _ _)) ms = do
+  (f,s) <- get
+  when (time == 80 && not f) $ do
+    send (Message 0 AddEntry) (time+5)
+    send (Message 0 AddEntry) (time+9)
+    put (True,s)
+  when (time == 140 && not s) $ do
+    send (Message 2 AddEntry) (time+5)
+    send (Message 2 AddEntry) (time+9)
+    put (f,True)
+
+  if time > 50 && time < 160 then
     sendWithinPartition sender time ms 
     else
       sendAllMessages time ms
@@ -43,4 +53,4 @@ cb _ = return ()
 
 
 
-simulateRaft recursive randGen = Layer.Raft.simulateRaft randGen global (False,recursive)
+simulateRaft randGen = Layer.Raft.simulateRaft randGen global (False,False)
