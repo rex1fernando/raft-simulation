@@ -27,15 +27,9 @@ data LogEntry = LogEntry { entryIndex :: Int,
                            entryTerm :: Int }
                   deriving Show
 
-emptyL :: LogEntry
-emptyL = LogEntry (-1) (-1)
-
-lengthen :: Seq LogEntry -> Int -> Seq LogEntry
-lengthen s i | length s >= i = s
-             | otherwise = s >< replicate (i - length s) emptyL
 
 insert :: Seq LogEntry -> Int -> LogEntry -> Seq LogEntry
-insert s i a | length s <= i = insert (lengthen s (i+1)) i a
+insert s i a | length s == i = s |> a
              | otherwise = update i a s
 
 insertAll :: Seq LogEntry -> [LogEntry] -> Seq LogEntry
@@ -292,7 +286,7 @@ raftHandler (AppE term leader prevLogIndex prevLogTerm entries leaderCommit) = d
       unless (null entries) $
           if prevLogIndex == (-1)
              || indexSatisfies (raftLog state) prevLogIndex matchesTerm then do
-            put state { raftLog = insertAll (take prevLogIndex (raftLog state)) entries }
+            put state { raftLog = insertAll (take (prevLogIndex+1) (raftLog state)) entries }
             state <- get
             when (leaderCommit > commitIndex state) $
               put state { commitIndex = min leaderCommit (length (raftLog state)) }
