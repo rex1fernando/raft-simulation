@@ -118,6 +118,7 @@ textN t = ((text t # fontSizeL 0.2 # fc black) <> rect 0.1 0.3 # fc white # lw n
 
 
 link :: (DSEvent RaftMessage, DSState RaftState a RaftMessage) -> Diagram Cairo -> Diagram Cairo
+link (Event rtime (Receive r s stime AddEntry),_) = id
 link (Event rtime (Receive r s stime _),_) = arrowR (tshow "sender: " (s,stimeD)) (tshow "receiver: " (r,rtimeD))
   where
     stimeD = (round stime) :: Int
