@@ -11,6 +11,7 @@ import Scenario.CRAfterAdd as CRAfterAdd
 import Scenario.CrashAfterAdd as CrashAfterAdd
 import Scenario.CrashAfterElect as CrashAfterElect
 import Scenario.CrashBadElect as CrashBadElect
+import Scenario.Partition as Partition
 import Visualizer
 import Data.Ratio
 import Diagrams.Prelude
@@ -24,9 +25,9 @@ s1 =  (CRAfterAdd.simulateRaft, "interesting/cr_after_add.pdf", 115)
 s2 =  (CrashAfterAdd.simulateRaft, "interesting/crash_after_add.pdf", 99)
 s3 =  (CrashAfterElect.simulateRaft False, "interesting/crash_after_elect.pdf", 94)
 s4 =  (CrashAfterElect.simulateRaft True, "interesting/crash_after_elect_r.pdf", 130)
+s5 =  (CrashBadElect.simulateRaft, "interesting/crash_bad_elect_fixed.pdf", 105)
 --s5 =  (CrashBadElect.simulateRaft, "interesting/crash_bad_elect.pdf", 95)
-s5 =  (CrashBadElect.simulateRaft, "interesting/crash_bad_elect_fixed.pdf", 109)
- 
+s6 =  (Partition.simulateRaft, "interesting/partition.pdf", 126)
 
 
 
@@ -49,6 +50,7 @@ main = do
   runScenario s3
   runScenario s4
   runScenario s5
+  runScenario s6
   --howLong <- getArgs >>= return . read . head
 
 
